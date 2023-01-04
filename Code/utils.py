@@ -90,16 +90,36 @@ class NormUnif(MyDistribution):
 
 ### Model functions
 
+# class SimpleDense(nn.Module):
+#     def __init__(self, input_dim) -> None:
+#         super().__init__()
+#         net = nn.ModuleList([nn.Linear(input_dim, int(4*input_dim))])
+#         net.append(nn.LeakyReLU(negative_slope=0.01))
+#         net.append(nn.Linear(int(4*input_dim), int(16*input_dim)))
+#         net.append(nn.LeakyReLU(negative_slope=0.01))
+#         net.append(nn.Linear(int(16*input_dim), int(4*input_dim)))
+#         net.append(nn.LeakyReLU(negative_slope=0.01))
+#         net.append(nn.Linear(int(4*input_dim), input_dim))
+#         self.nets = nn.Sequential(*net)
+
+#     def forward(self, x):
+#         return self.nets(x)
+
+
 class SimpleDense(nn.Module):
-    def __init__(self, input_dim) -> None:
+    def __init__(self, input_dim, max_power_of_two) -> None:
         super().__init__()
-        net = [nn.Linear(input_dim, int(2*input_dim))]
-        net.append(nn.LeakyReLU(negative_slope=0.01))
-        net.append(nn.Linear(int(2*input_dim), input_dim))
-        self.nets = nn.Sequential(*net)
+        powers_of_two = list(range(5)) + list(range(5, -1, -1))
+        nets = []
+        for i in range(len(powers_of_two) - 1):
+            p = powers_of_two[i]
+            p_next = powers_of_two[i+1]
+            nets.append(nn.Linear(input_dim* 2 ** p, input_dim*2**p_next))
+            nets.append(nn.LeakyReLU(0.2))
+        self.seq_nets =  nn.Sequential(*nets)
 
     def forward(self, x):
-        return self.nets(x)
+        return self.seq_nets(x)
 
 class Swap(nn.Module):
     """
