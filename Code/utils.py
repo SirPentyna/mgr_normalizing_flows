@@ -23,7 +23,13 @@ class MyDistribution(nn.Module):
 
 
 class NormUnif(MyDistribution):
-    """Mixture with standard normal distribution and uniform distribution on a rectangle"""
+    """Mixture with standard normal distribution and uniform distribution on a rectangle
+    Args:
+          x_dim: Dimension of each data point
+          prob_delta: probability of normal distribution
+          K_intervals: intervals that construct a rectangle - first row is a0, a1, ... and second row b0, b1, ...
+                        and rectangle is constructed based on (a0, b0), (a1, b1), ...
+    """
     def __init__(self, x_dim, prob_delta, K_intervals):
         super().__init__()
 
@@ -31,10 +37,11 @@ class NormUnif(MyDistribution):
         self.prob_delta = prob_delta
         self.K_intervals = K_intervals
 
+        self.K_area = torch.prod(torch.diff(self.K_intervals, dim = 0))
+
         self.m = torch.distributions.MultivariateNormal(torch.zeros(self.x_dim), torch.eye(self.x_dim))
 
     def calculate_pdf(self, sample_point):
-        K_area = torch.prod(torch.diff(self.K_intervals, dim = 0))
 
         if len(sample_point.shape) == 1:
             is_in_area = torch.sum(
@@ -43,7 +50,7 @@ class NormUnif(MyDistribution):
                     torch.lt(sample_point, self.K_intervals[1])
                     )
                 )
-            return self.prob_delta * np.exp(m.log_prob(sample_point)) + (1 - self.prob_delta) * (1 / K_area) * is_in_area
+            return self.prob_delta * np.exp(m.log_prob(sample_point)) + (1 - self.prob_delta) * (1 / self.K_area) * is_in_area
 
         elif len(sample_point.shape) == 2:
             is_in_area = \
@@ -53,10 +60,27 @@ class NormUnif(MyDistribution):
                 torch.lt(sample_point, self.K_intervals[1])), dim = 1), 
             sample_point.shape[1] * torch.ones((sample_point.shape[0],)))
 
-            return self.prob_delta * np.exp(self.m.log_prob(sample_point)) + (1 - self.prob_delta) * (1 / K_area) * is_in_area
+            return self.prob_delta * np.exp(self.m.log_prob(sample_point)) + (1 - self.prob_delta) * (1 / self.K_area) * is_in_area
 
     def log_prob(self, z):
         return torch.log(self.calculate_pdf(z))
+
+    def prob_greater_t(self, t):
+        # Probability of Normal part
+        standard_norm =  torch.distributions.Normal(torch.tensor([0.0]), torch.tensor([1.0]))
+
+        prob_norm = (1 - standard_norm.cdf(t))**self.x_dim
+
+        # Probability of rectangle part
+        a = self.K_intervals[0]
+        b = self.K_intervals[1]
+        max_at = np.maximum(a, torch.ones(len(a))*t)
+
+        int_len = torch.maximum(b- max_at, torch.zeros(len(b)))
+        area_above_t = torch.prod(int_len)
+        prob_rectangle = area_above_t / self.K_area
+
+        return self.prob_delta * prob_norm + (1 - self.prob_delta) * prob_rectangle
 
 
     def forward(self, num_samples=1):
@@ -86,6 +110,11 @@ class NormUnif(MyDistribution):
         X = delta * Z   + (1 - delta) * K
         return  X, self.log_prob(X)
 
+
+def estim_prob_greater_t(model, R, t_float):
+    samples = model.sample(R)[0]
+    samples_np = samples.detach().numpy()
+    return np.sum(np.all(samples_np>t_float, axis = 1)) / R
 
 
 ### Model functions
