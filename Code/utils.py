@@ -150,6 +150,21 @@ class SimpleDense(nn.Module):
     def forward(self, x):
         return self.seq_nets(x)
 
+class SimpleDenseCustDim(nn.Module):
+    def __init__(self, dims) -> None:
+        super().__init__()
+        nets = []
+        for i in range(len(dims) - 1):
+            d = dims[i]
+            d_next = dims[i+1]
+            nets.append(nn.Linear(d, d_next))
+            nets.append(nn.LeakyReLU(0.2))
+        self.seq_nets =  nn.Sequential(*nets)
+
+    def forward(self, x):
+        return self.seq_nets(x)
+
+
 class Swap(nn.Module):
     """
     Permutation features along the channel dimension
@@ -216,6 +231,47 @@ class AffineSingleBlock(nn.Module):
         x2 = y2 - y1_modified
         log_det = zero_log_det_like_z(y1)
         return Con(x1, x2), log_det
+
+
+class RealNVPBlock(nn.Module):
+    def __init__(self, param_net_t = None, param_net_s = None):
+        super().__init__()
+
+        self.param_net_t = param_net_t
+        self.param_net_s = param_net_s
+        
+    
+    def forward(self, z):
+        x1, x2 = Split(z)
+        s = self.param_net_s(x1)
+        x1_modified = self.param_net_t(x1)
+        y1 = x1
+        y2 = x2 * torch.exp(s)+ x1_modified
+        log_det = zero_log_det_like_z(y1) + torch.sum(s)
+        return Con(y1, y2), log_det
+
+    def inverse(self, z):
+        y1, y2 = Split(z)
+        s = self.param_net_s(y1)
+        y1_modified = self.param_net_t(y1)
+        x1 = y1
+        x2 = (y2 - y1_modified) * torch.exp(-s)
+        log_det = zero_log_det_like_z(y1) - torch.sum(s)
+        return Con(x1, x2), log_det
+
+class ScalingBlock(nn.Module):
+    def __init__(self, dim_x = 2):
+        super().__init__()
+
+        self.s = torch.nn.Parameter(torch.zeros([1 ,dim_x]))
+       
+    def forward(self, z):
+        log_det = zero_log_det_like_z(z) + torch.sum(self.s)
+        return z * torch.exp(self.s), log_det
+
+    def inverse(self, z):
+        log_det = zero_log_det_like_z(z) - torch.sum(self.s)
+        return z / torch.exp(self.s), log_det
 
 
 class AffineMultipleBlocks(nn.Module):
