@@ -5,6 +5,9 @@ import normflows as nf
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+from scipy.stats import chi2
+import seaborn as sns
+
 # Distribution 
 
 
@@ -111,11 +114,13 @@ class NormUnif(MyDistribution):
         return  X, self.log_prob(X)
 
 
+def calc_prob_greater_t(samples_np, t_float):
+    return np.sum(np.all(samples_np>t_float, axis = 1)) / samples_np.shape[0]
+
 def estim_prob_greater_t(model, R, t_float):
     samples = model.sample(R)[0]
     samples_np = samples.detach().numpy()
-    return np.sum(np.all(samples_np>t_float, axis = 1)) / R
-
+    return calc_prob_greater_t(samples_np=samples_np, t_float=t_float)
 
 ### Model functions
 
@@ -151,14 +156,23 @@ class SimpleDense(nn.Module):
         return self.seq_nets(x)
 
 class SimpleDenseCustDim(nn.Module):
-    def __init__(self, dims) -> None:
+    def __init__(self, dims,  init_zeros=False) -> None:
         super().__init__()
         nets = []
-        for i in range(len(dims) - 1):
+        for i in range(len(dims) - 2):
             d = dims[i]
             d_next = dims[i+1]
             nets.append(nn.Linear(d, d_next))
             nets.append(nn.LeakyReLU(0.2))
+        nets.append(nn.Linear(dims[-2], dims[-1]))
+        if init_zeros:
+            #nets[-1].weight.data.zero_()
+            #nets[-1].bias.data.zero_()
+            torch.nn.init.zeros_(nets[-1].weight)
+            torch.nn.init.zeros_(nets[-1].bias)
+            #nn.init.zeros_(nets[-1].weight)
+            #nn.init.zeros_(nets[-1].bias)
+            #nn.init.uniform_(nets[-1].weight, 0.0, 0.001)
         self.seq_nets =  nn.Sequential(*nets)
 
     def forward(self, x):
@@ -317,7 +331,8 @@ class MyNormFlow(nn.Module):
             z, log_det = self.flows[i].inverse(z)
             log_q += log_det
         log_q += self.q0.log_prob(z)
-        return -torch.mean(log_q)
+        ### if inf then
+        return torch.abs(-torch.mean(log_q))
 
     
     def sample(self, num_samples):
@@ -343,6 +358,126 @@ class MyNormFlow(nn.Module):
         log_q += self.q0.log_prob(z)
         return log_q
 
+
+
+#### Stratification
+
+
+
+def generate_from_normal_stratum(n, Rm, m, stratum_i):
+    # Sampling from N(0,1) with dimension n:
+    mNorm = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros(n), torch.eye(n))
+    zeta = mNorm.sample((Rm,))
+
+    # Normalisation
+    length = torch.sqrt(torch.sum(torch.mul(zeta,zeta), axis=1, keepdims=True))
+    X = zeta/length
+
+    # Sampling from uniform distribution on [0,1]
+    unif = torch.distributions.Uniform(0, 1)
+    u = unif.sample((Rm,1))
+
+    # Making sample from uniform distribution on [i/m, (i+1)/m]
+    v = stratum_i/m + u*1/m
+
+    # Inverse cdf of chi2 
+    d2 = chi2.ppf(v, df = n)
+
+    # Rescaling samples from uniform normal
+    sample = torch.tensor(np.sqrt(d2)) * X
+    return sample.detach().numpy()
+
+def generate_samples_from_model_stratified(model, number_of_samples_from_model, m, n, verbose = False, palette_type = 'viridis'):
+    Rm = int(number_of_samples_from_model/m)
+    samples_full = np.empty((0,n))
+    stratum_number = []
+
+    if verbose:
+        fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 8), subplot_kw=dict(box_aspect=1))
+        if palette_type == 'viridis':
+            palette = list(sns.color_palette('viridis', m).as_hex())
+        elif palette_type == 'python_blue':
+            palette = list(sns.dark_palette(python_blue, m).as_hex())
+
+    for i in range(m):
+        s_np = generate_from_normal_stratum(n=n, Rm=Rm, m=m, stratum_i=i)
+        stratum_number +=[i]*Rm
+
+        if verbose:
+            axes[0].scatter(s_np[:,0],s_np[:,1], label=f'Stratum {i+1}',c=palette[i], alpha=0.5, marker=".")
+
+        #put through model
+        sample2 = torch.tensor(s_np, dtype=torch.float)
+        for flow in model.flows:
+            sample2, log_det = flow(sample2)
+        s_np2 = sample2.detach().numpy()
+        if verbose:
+            axes[1].scatter(s_np2[:,0],s_np2[:,1], label=f'Stratum {i+1}',c=palette[i], alpha=0.5, marker=".")
+        samples_full = np.concatenate((samples_full,s_np2))
+        
+
+    if verbose:
+        axes[0].set_title("Standard Normal")
+        axes[1].set_title("After model")
+        
+        axes[0].legend()
+        axes[1].legend()
+
+        plt.show()
+    
+    if not verbose:
+        return {'samples':samples_full, 
+                'stratum_number':stratum_number}
+
+            
+def generate_samples_from_model_stratified_old(model, number_of_samples_from_model, m, n, x_m, x_sd, verbose = False, palette_type = 'viridis'):
+    Rm = int(number_of_samples_from_model/m)
+    samples_unnorm_full = np.empty((0,n))
+    stratum_number = []
+
+    if verbose:
+        fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(24, 8))
+        if palette_type == 'viridis':
+            palette = list(sns.color_palette('viridis', m).as_hex())
+        elif palette_type == 'python_blue':
+            palette = list(sns.dark_palette(python_blue, m).as_hex())
+
+    for i in range(m):
+        s_np = generate_from_normal_stratum(n=n, Rm=Rm, m=m, stratum_i=i)
+        stratum_number +=[i]*Rm
+
+        if verbose:
+            axes[0].scatter(s_np[:,0],s_np[:,1], label=f'Strata {i+1}',c=palette[i], alpha=0.5, marker=".")
+            axes[0].gca().set_aspect('equal', 'box')
+
+        #put through model
+        sample2 = torch.tensor(s_np, dtype=torch.float)
+        for flow in model.flows:
+            sample2, log_det = flow(sample2)
+        s_np2 = sample2.detach().numpy()
+        if verbose:
+            axes[1].scatter(s_np2[:,0],s_np2[:,1], label=f'Stratum {i+1}',c=palette[i], alpha=0.5, marker=".")
+            axes[1].gca().set_aspect('equal', 'box')
+        
+        # unnormalized
+        samples_unnorm = s_np2 * x_sd + x_m
+        samples_unnorm_full = np.concatenate((samples_unnorm_full,samples_unnorm))
+
+        if verbose:
+            axes[2].scatter(samples_unnorm[:,0],samples_unnorm[:,1], label=f'Stratum {i+1}',c=palette[i], alpha=0.5, marker=".")
+
+    if verbose:
+        axes[0].set_title("Standard Normal")
+        axes[1].set_title("After model")
+        axes[2].set_title("After model, unnormalized")
+        
+        axes[0].legend()
+        axes[1].legend()
+        axes[2].legend()
+
+        plt.show()
+    return {'samples':samples_unnorm_full, 
+            'stratum_number':stratum_number}
 
 
 
