@@ -429,6 +429,59 @@ def generate_samples_from_model_stratified(model, number_of_samples_from_model, 
         return {'samples':samples_full, 
                 'stratum_number':stratum_number}
 
+def generate_samples_from_model_stratified_ffjord(func, number_of_samples_from_model, m, n, verbose = False, palette_type = 'viridis'):
+    Rm = int(number_of_samples_from_model/m)
+    samples_full = np.empty((0,n))
+    stratum_number = []
+
+
+    if verbose:
+        fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 8), subplot_kw=dict(box_aspect=1))
+        if palette_type == 'viridis':
+            palette = list(sns.color_palette('viridis', m).as_hex())
+        elif palette_type == 'python_blue':
+            palette = list(sns.dark_palette(python_blue, m).as_hex())
+
+    for i in range(m):
+        s_np = generate_from_normal_stratum(n=n, Rm=Rm, m=m, stratum_i=i)
+        stratum_number +=[i]*Rm
+
+        if verbose:
+            axes[0].scatter(s_np[:,0],s_np[:,1], label=f'Stratum {i+1}',c=palette[i], alpha=0.5, marker=".")
+
+        #put through model
+        #func jest najważniejsze tu
+        sample2 = torch.tensor(s_np, dtype=torch.float)
+        logp_diff_t0 = torch.zeros(Rm, 1).type(torch.float32).to(device)
+        z_t_samples, _ = odeint(
+                func,
+                (sample2, logp_diff_t0),
+                torch.tensor([0.0,10.0]).to(device),
+                atol=1e-5,
+                rtol=1e-5,
+                method='dopri5',
+            )
+
+
+        s_np2 = z_t_samples[1].detach().cpu().numpy()
+
+        if verbose:
+            axes[1].scatter(s_np2[:,0],s_np2[:,1], label=f'Stratum {i+1}',c=palette[i], alpha=0.5, marker=".")
+        samples_full = np.concatenate((samples_full,s_np2))
+        
+    if verbose:
+        axes[0].set_title("Standard Normal")
+        axes[1].set_title("After model")
+        
+        axes[0].legend()
+        axes[1].legend()
+
+        plt.show()
+    
+    if not verbose:
+        return {'samples':samples_full, 
+                'stratum_number':stratum_number}
+
             
 def generate_samples_from_model_stratified_old(model, number_of_samples_from_model, m, n, x_m, x_sd, verbose = False, palette_type = 'viridis'):
     Rm = int(number_of_samples_from_model/m)
