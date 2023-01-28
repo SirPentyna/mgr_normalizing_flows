@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import numpy as np
+import pandas as pd
 import normflows as nf
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -387,8 +388,41 @@ def generate_from_normal_stratum(n, Rm, m, stratum_i):
     sample = torch.tensor(np.sqrt(d2)) * X
     return sample.detach().numpy()
 
-def generate_samples_from_model_stratified(model, number_of_samples_from_model, m, n, verbose = False, palette_type = 'viridis'):
-    Rm = int(number_of_samples_from_model/m)
+def generate_samples_from_model_stratified(model, number_of_samples_from_model, m, n, allocation_type= 'proportional',verbose = False, palette_type = 'viridis'):
+    '''Generate stratified samples from model.
+
+    Args:
+        model 
+            - trained norm flows model
+        number_of_samples_from_model 
+            - total number of samples to generate
+        m 
+            - number of strata
+        n 
+            - dimensionality of the data
+        allocation_type ('proportional') ['proportional', 'optimal'] 
+            - how to allocate quantity of points
+        verbose (False) 
+            - if true, the function draws plots, if false the function returns results
+        palette_type ('viridis') ['viridis', 'python_blue'] 
+            - palette for plots
+    Returns:
+        dict:
+            samples - np.array with samples
+            stratum_number - list with index of stratum for each row of samples
+    '''
+
+    if allocation_type == 'proportional':
+        Rm_array = np.ones(m) * int(number_of_samples_from_model/m)
+    elif allocation_type ==  'optimal':
+        alloc_gen = generate_samples_from_model_stratified(model, 100, m=m, n = 2,verbose=False)
+        alloc_samples = alloc_gen['samples']
+        alloc_strat = np.array(alloc_gen['stratum_number']).reshape(-1,1)
+        alloc_both = np.concatenate((alloc_strat, alloc_samples), axis = 1)
+        strata_list = np.split(alloc_both[:,1:], np.unique(alloc_strat, return_index=True)[1][1:])
+        strata_std = np.array(list(map(np.std, strata_list)))
+        pm = np.ones(m)/m
+        Rm_array = strata_std * pm /np.sum(strata_std * pm) * number_of_samples_from_model
     samples_full = np.empty((0,n))
     stratum_number = []
 
@@ -400,6 +434,7 @@ def generate_samples_from_model_stratified(model, number_of_samples_from_model, 
             palette = list(sns.dark_palette(python_blue, m).as_hex())
 
     for i in range(m):
+        Rm = int(Rm_array[i])
         s_np = generate_from_normal_stratum(n=n, Rm=Rm, m=m, stratum_i=i)
         stratum_number +=[i]*Rm
 
