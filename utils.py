@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from scipy.stats import chi2
 import seaborn as sns
 
+python_blue = '#1F77B4'
+
 # Distribution 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -696,4 +698,103 @@ def get_batch_their(num_samples):
     return(x, logp_diff_t1)
 
 
+
+
+########### Prepare single iteration result
+
+
+def create_results_df(model, nu, m, n=2, list_nums_s = [2048, 4096, 10000]):
+
+    t_array = np.arange(0, 3.01, 0.1)
+    true_probs = []
+    cmc_2048 = []
+    cmc_4096 = []
+    cmc_10000 = []
+
+    # Calculating true value of P(X>t)
+    for t_float in t_array:
+        t = torch.tensor(t_float)
+        true_probs.append(nu.prob_greater_t(t).item())
+
+    dict_estims = {'t':t_array, 'true_probs':true_probs}
+
+    for nums_s in list_nums_s:
+        cmc_list = []
+        strat_list = []
+        strat_optim_list = []
+
+        samples_cmc = model.sample(nums_s)[0].detach().numpy()
+        samples_strat = generate_samples_from_model_stratified(model, nums_s, m=m, n=n, verbose=False)['samples']
+        samples_strat_optim = generate_samples_from_model_stratified(model, nums_s, m=m, n=n, allocation_type = 'optimal',verbose=False)['samples']
+        
+
+        for t_float in t_array:
+            #cmc_list.append(estim_prob_greater_t(model, R = nums_s, t_float=t_float))
+            cmc_list.append(calc_prob_greater_t(samples_np=samples_cmc, t_float=t_float))
+            
+            strat_list.append(calc_prob_greater_t(samples_np=samples_strat, t_float=t_float))
+            strat_optim_list.append(calc_prob_greater_t(samples_np=samples_strat_optim, t_float=t_float))
+        
+        dict_estims[f'cmc_{nums_s}'] = cmc_list.copy()
+        dict_estims[f'strat_prop_{nums_s}'] = strat_list.copy()
+        dict_estims[f'strat_optim_{nums_s}'] = strat_optim_list.copy()
+
+    estim_df = pd.DataFrame(dict_estims)
+    estim_df = estim_df[sorted(estim_df)]
+    return estim_df
+
+
+########### Plotting functions for single iterastion results
+
+
+def plot_estim_cmc(estim_df):
+    python_blue = '#1F77B4'
+    num_cols = len([col for col in estim_df.columns if 'cmc' in col])
+    palette = list(sns.dark_palette(python_blue, 4).as_hex())
+
+    plt.figure(figsize=(8, 5),  dpi=100)
+    for i, c in enumerate([col for col in estim_df.columns if 'cmc' in col]):
+        plt.plot(estim_df['t'], estim_df[c], c=palette[i], label=c, alpha = 0.4)
+    plt.plot(estim_df['t'], estim_df['true_probs'], c='green', label = 'True value')
+    plt.title("Value of P(X>t), true and CMC estimators")
+    plt.xlabel('t')
+    plt.ylabel('P(X>t)')
+    plt.legend()
+    plt.show()
+
+
+
+def plot_estim_strat(estim_df):
+    python_blue = '#1F77B4'
+    num_cols = len([col for col in estim_df.columns if 'strat' in col])
+    palette = list(sns.dark_palette('purple', num_cols).as_hex())
+    palette = list(sns.color_palette("rocket_r", num_cols+ 2).as_hex())
+
+    plt.figure(figsize=(8, 5),  dpi=100)
+    for i, c in enumerate([col for col in estim_df.columns if 'strat' in col]):
+        plt.plot(estim_df['t'], estim_df[c], c=palette[i], label=c, alpha = 0.4)
+        
+    plt.plot(estim_df['t'], estim_df['true_probs'], c='green', label = 'True value')
+    plt.title("Value of P(X>t), true and Stratified estimators")
+    plt.xlabel('t')
+    plt.ylabel('P(X>t)')
+    plt.legend()
+    plt.show()
+
+
+def plot_differences(estim_df):
+    differences = estim_df.drop(['t','true_probs'], axis=1).sub(estim_df['true_probs'], axis=0)
+
+    plt.figure(figsize=(8, 5),  dpi=100)
+    for i, c in enumerate([col for col in estim_df.columns if 'cmc' in col]):
+        plt.plot(estim_df['t'], differences[c], c=python_blue, label=c, alpha = 0.8* 1/(i+1))
+    for i, c in enumerate([col for col in estim_df.columns if 'strat' in col]):
+        plt.plot(estim_df['t'], differences[c], c='purple', label=c, alpha = 0.8* 1/(i+1))
+    #plt.plot(estim_df['t'], estim_df['true_probs'], c='green', label = 'True value')
+    plt.title("Differences between true value of P(X>t) and estimators")
+    plt.axhline(0, c='green')
+    plt.xlabel('t')
+    plt.ylabel('Estimator - true value')
+    plt.legend()
+    plt.show()
 
